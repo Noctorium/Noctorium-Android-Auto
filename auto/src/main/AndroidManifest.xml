@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- What tells Android Auto that Noctorium is a media app. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!--
+          The covers in the car's menu. Android Auto shows covers from content:// addresses only, so each song's cover
+          is handed over through this. Open to Android Auto, which is another app; it serves only covers the car's menu
+          itself listed, so nothing else can have Noctorium fetch an address of its choosing.
+        -->
+        <provider
+            android:name="app.noctorium.auto.CarArtworkProvider"
+            android:authorities="${applicationId}.carartwork"
+            android:exported="true" />
+    </application>
+</manifest>
