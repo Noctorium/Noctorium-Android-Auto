@@ -8,6 +8,7 @@ import app.noctorium.domain.Playlist
 import app.noctorium.domain.ProviderType
 import app.noctorium.domain.Track
 import app.noctorium.domain.artworkAt
+import kotlinx.coroutines.async
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -39,6 +40,13 @@ class CarLibrary(
     @Volatile
     private var pickedId: String? = null
 
+    /** The artists the last search found, opened by their place. */
+    @Volatile
+    private var lastArtists: List<Playlist> = emptyList()
+
+    /** Artists' songs as last read, by the artist's id, so a song picked plays what was shown. */
+    private val artistTracks = java.util.concurrent.ConcurrentHashMap<String, List<Track>>()
+
     /** Radio stations as last listed, picked from by their place. */
     @Volatile
     private var lastStations: List<Track> = emptyList()
@@ -51,8 +59,12 @@ class CarLibrary(
     /** The root a car asks for as it starts, to offer what was playing: its one child is [resumption]. */
     fun recentRoot(): MediaItem = folder(RESUME, "Noctorium", null)
 
-    /** What the last search found, as the car lists it. */
-    fun searchResults(): List<MediaItem> = songs(SEARCH, lastSearch)
+    /** What the last search found, as the car lists it: the artists, then the songs. */
+    fun searchResults(): List<MediaItem> = artistFolders() + songs(SEARCH, lastSearch)
+
+    private fun artistFolders(): List<MediaItem> = lastArtists.take(MAX_ARTISTS).mapIndexed { i, page ->
+        folder(id(ARTIST, i), page.title, "Artist · ${page.provider.displayName}", cover = page.artworkUrl, group = "Artists")
+    }
 
     /** What is under [parentId], or null for an id the menu has no such place for. */
     suspend fun children(parentId: String): List<MediaItem>? {
@@ -82,14 +94,20 @@ class CarLibrary(
             }
             QUEUE -> {
                 val queue = music.queue()
-                queue.tracks.mapIndexed { i, track -> song(id(QUEUE, i), track, group = "Queue", current = i == queue.currentIndex) } +
+                // The car's way to the artist of the song playing: their page, as a folder at the head of the queue.
+                val playing = queue.tracks.getOrNull(queue.currentIndex)
+                val moreBy = playing?.let(music::artistPage)?.let { page ->
+                    folder(MORE_BY, "More by ${page.title}", page.provider.displayName, cover = playing.artworkUrl, group = "Queue")
+                }
+                listOfNotNull(moreBy) +
+                    queue.tracks.mapIndexed { i, track -> song(id(QUEUE, i), track, group = "Queue", current = i == queue.currentIndex) } +
                     queue.suggestions.mapIndexed { i, track -> song(id(NEXT, i), track, group = queue.suggestionsFrom?.let { "Autoplay · $it" } ?: "Autoplay") }
             }
             RADIO -> {
                 lastStations = runCatching { music.stations() }.getOrDefault(lastStations)
                 lastStations.mapIndexed { i, station -> song(id(RADIO, i), station) }
             }
-            RECENT, LOCAL, SERVICE, SEARCH -> tracksOf(parentId)?.let { songs(parentId, it) }
+            RECENT, LOCAL, SERVICE, SEARCH, ARTIST, MORE_BY -> tracksOf(parentId)?.let { songs(parentId, it) }
             RESUME -> listOfNotNull(resumption())
             else -> null
         }
@@ -106,6 +124,8 @@ class CarLibrary(
             path.size == 1 -> ROOT
             path.size == 2 && path.first() in setOf(LOCAL, SERVICE) -> LIBRARY
             path.size == 2 && path.first() == HOME -> HOME
+            path.size == 2 && path.first() == ARTIST -> return artistFolders().firstOrNull { it.mediaId == id }
+            id == MORE_BY -> QUEUE
             else -> null
         }
         if (listedIn != null) return children(listedIn)?.firstOrNull { it.mediaId == id }
@@ -116,9 +136,12 @@ class CarLibrary(
     }
 
     /** Searches, and keeps what was found for the car to pick from. */
-    suspend fun search(query: String): List<MediaItem> {
+    suspend fun search(query: String): List<MediaItem> = kotlinx.coroutines.coroutineScope {
+        val artists = async { runCatching { music.searchArtists(query) }.getOrDefault(emptyList()) }
         lastSearch = runCatching { music.search(query) }.getOrDefault(emptyList())
-        return songs(SEARCH, lastSearch)
+        lastArtists = artists.await()
+        artistTracks.clear()
+        searchResults()
     }
 
     /**
@@ -151,6 +174,7 @@ class CarLibrary(
             RADIO -> music.playStation(track)
             LOCAL -> music.localPlaylists().firstOrNull { it.id == path[1] }?.let { music.playLocalPlaylist(it, track) } ?: return false
             SERVICE -> music.servicePlaylists().firstOrNull { serviceKey(it) == path[1] }?.let { music.playPlaylist(it.copy(tracks = tracks), track) } ?: return false
+            ARTIST, MORE_BY -> artistPageAt(parent)?.let { music.playPlaylist(it.copy(tracks = tracks), track) } ?: return false
             else -> return false
         }
         picked(mediaId)
@@ -174,7 +198,7 @@ class CarLibrary(
             music.playFromHome(first, shelf.tracks)
             return song(id(HOME, 0, 0), first)
         }
-        val found = search(query).firstOrNull() ?: return null
+        val found = search(query).firstOrNull { it.mediaMetadata.isPlayable == true } ?: return null
         return if (play(found.mediaId)) found else null
     }
 
@@ -219,9 +243,23 @@ class CarLibrary(
                 servicePlaylistTracks[key] ?: runCatching { music.playlistTracks(playlist) }.getOrNull()?.also { servicePlaylistTracks[key] = it }
             }
             SEARCH -> lastSearch
+            ARTIST, MORE_BY -> {
+                val page = artistPageAt(parentId) ?: return null
+                artistTracks[page.playlistKey] ?: runCatching { music.playlistTracks(page) }.getOrNull()?.also { artistTracks[page.playlistKey] = it }
+            }
             RADIO -> lastStations.ifEmpty { runCatching { music.stations() }.getOrDefault(emptyList()).also { lastStations = it } }
             QUEUE -> music.queue().tracks
             NEXT -> music.queue().suggestions
+            else -> null
+        }
+    }
+
+    /** The artist page an artist folder's id names: one the search found, or the playing song's artist's. */
+    private fun artistPageAt(folderId: String): Playlist? {
+        val path = parse(folderId)
+        return when (path.firstOrNull()) {
+            ARTIST -> path.getOrNull(1)?.toIntOrNull()?.let { lastArtists.getOrNull(it) }
+            MORE_BY -> music.queue().let { queue -> queue.tracks.getOrNull(queue.currentIndex) }?.let(music::artistPage)
             else -> null
         }
     }
@@ -255,10 +293,12 @@ class CarLibrary(
         cover: String? = null,
         browsableStyle: Int = LIST,
         playableStyle: Int = LIST,
+        group: String? = null,
     ): MediaItem {
         val extras = Bundle().apply {
             putInt(CONTENT_STYLE_BROWSABLE, browsableStyle)
             putInt(CONTENT_STYLE_PLAYABLE, playableStyle)
+            if (group != null) putString(GROUP_TITLE, group)
         }
         val metadata = MediaMetadata.Builder()
             .setTitle(title)
@@ -284,6 +324,11 @@ class CarLibrary(
         const val NEXT = "next"
         const val SEARCH = "search"
         const val RESUME = "resume"
+        const val ARTIST = "artist"
+        const val MORE_BY = "more-by"
+
+        /** How many artists a search lists above its songs. */
+        const val MAX_ARTISTS = 6
 
         /** As many of a list as a car is given: Android Auto shows far fewer, and scrolls the rest. */
         const val MAX_ITEMS = 100

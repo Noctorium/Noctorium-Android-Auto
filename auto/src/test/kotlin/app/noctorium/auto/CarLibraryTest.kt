@@ -142,4 +142,33 @@ class CarLibraryTest {
         assertNull(CarArtwork.uriFor("app.test.carartwork", "file:///data/secret"))
         assertNull(CarArtwork.uriFor("app.test.carartwork", null))
     }
+
+    @Test
+    fun `the car's search lists artists above the songs, and an artist opens to their songs`() = runTest {
+        notes.artists = listOf(Playlist("artist-named:Daft Punk", "Daft Punk", ProviderType.YOUTUBE_MUSIC))
+        val found = library.search("daft punk")
+        assertEquals(listOf("Daft Punk", "Song x1", "Song x2"), found.map { it.mediaMetadata.title.toString() })
+        val artist = found.first()
+        assertEquals(true, artist.mediaMetadata.isBrowsable)
+        assertEquals("Artists", artist.mediaMetadata.extras?.getString(CarLibrary.GROUP_TITLE))
+        val songs = library.children(artist.mediaId)!!
+        assertEquals(listOf("Song sv1", "Song sv2"), songs.map { it.mediaMetadata.title.toString() })
+        assertTrue(library.play(songs[1].mediaId))
+        assertEquals(listOf("service Daft Punk sv2 of 2"), notes.played)
+        assertEquals("Daft Punk", library.item(artist.mediaId)?.mediaMetadata?.title.toString())
+        // A voice's "play ..." plays a song, never opens an artist.
+        notes.played.clear()
+        library.playAsked("daft punk")
+        assertEquals(listOf("search x1 of 2"), notes.played)
+    }
+
+    @Test
+    fun `the queue opens with the playing song's artist`() = runTest {
+        notes.hasArtistPages = true
+        val queue = library.children(CarLibrary.QUEUE)!!
+        assertEquals("More by Artist q2", queue.first().mediaMetadata.title.toString())
+        val songs = library.children(queue.first().mediaId)!!
+        assertTrue(library.play(songs[0].mediaId))
+        assertEquals(listOf("service Artist q2 sv1 of 2"), notes.played)
+    }
 }

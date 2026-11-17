@@ -28,6 +28,8 @@ class NotedMusic : CarMusic {
     var stationList = listOf(testSong("fm1", ProviderType.RADIO), testSong("fm2", ProviderType.RADIO))
     var readPlaylists = 0
     var loaded = false
+    var artists = emptyList<Playlist>()
+    var hasArtistPages = false
 
     override fun homeShelves() = shelves
     override fun recent() = recentSongs
@@ -38,6 +40,9 @@ class NotedMusic : CarMusic {
         return listOf(testSong("sv1", ProviderType.SOUNDCLOUD), testSong("sv2", ProviderType.SOUNDCLOUD))
     }
     override fun queue() = queueState
+    override suspend fun searchArtists(text: String) = artists
+    override fun artistPage(track: Track): Playlist? =
+        if (hasArtistPages) Playlist("artist-named:${track.artistLine}", track.artistLine, track.provider) else null
     override suspend fun search(text: String) = if (text.isBlank()) emptyList() else listOf(testSong("x1"), testSong("x2"))
     override suspend fun stations() = stationList
     override fun positionMs() = 42_000L

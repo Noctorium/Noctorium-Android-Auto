@@ -27,6 +27,12 @@ interface CarMusic {
     fun queue(): QueueState
     suspend fun search(text: String): List<Track>
 
+    /** Artists for [text], as pages whose songs [playlistTracks] reads: what the car's search lists above the songs. */
+    suspend fun searchArtists(text: String): List<Playlist> = emptyList()
+
+    /** The page of [track]'s artist on its service, or null for none: the queue's "More by" folder. */
+    fun artistPage(track: Track): Playlist? = null
+
     /** Radio stations: the most listened-to in the country chosen in the app. */
     suspend fun stations(): List<Track>
 
@@ -69,6 +75,10 @@ class AppStateCarMusic(private val state: AppState) : CarMusic {
     override fun queue(): QueueState = state.shownQueue.value
 
     override suspend fun search(text: String): List<Track> = state.searchQuietly(text)
+
+    override suspend fun searchArtists(text: String): List<Playlist> = state.searchArtistsQuietly(text)
+
+    override fun artistPage(track: Track): Playlist? = track.artists.firstOrNull()?.let { state.artistPageQuietly(it, track) }
 
     override suspend fun stations(): List<Track> = state.radioStationsQuietly()
 
