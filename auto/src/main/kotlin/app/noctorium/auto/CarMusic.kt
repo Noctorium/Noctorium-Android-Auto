@@ -5,6 +5,7 @@ import app.noctorium.domain.Playlist
 import app.noctorium.domain.Track
 import app.noctorium.playback.QueueState
 import app.noctorium.playlists.LocalPlaylist
+import app.noctorium.domain.likedFirst
 
 /** A row of Home, as the car lists it. */
 data class CarShelf(val title: String, val subtitle: String?, val tracks: List<Track>)
@@ -67,7 +68,8 @@ class AppStateCarMusic(private val state: AppState) : CarMusic {
 
     override fun localPlaylists(): List<LocalPlaylist> = state.library.value.localPlaylists
 
-    override fun servicePlaylists(): List<Playlist> = state.library.value.playlists
+    // Each service's liked songs first, as the library lists them.
+    override fun servicePlaylists(): List<Playlist> = state.library.value.playlists.likedFirst()
 
     override suspend fun playlistTracks(playlist: Playlist): List<Track> =
         playlist.tracks.ifEmpty { state.playlistTracks(playlist) }
